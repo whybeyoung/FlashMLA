@@ -20,6 +20,22 @@
 #include "sm100/prefill/dense/interface.h"
 #include "sm100/prefill/sparse/fwd.h"
 
+// Forward declaration for dense fp8 functions
+extern std::vector<at::Tensor>
+fwd_kvcache_mla_fp8(
+    at::Tensor &q,
+    const at::Tensor &kcache,
+    const int64_t head_size_v,
+    const at::Tensor &seqlens_k,
+    const at::Tensor &block_table,
+    const double softmax_scale,
+    bool is_causal,
+    const at::Tensor &tile_scheduler_metadata,
+    const at::Tensor &num_splits,
+    const std::optional<at::Tensor> &descale_q,
+    const std::optional<at::Tensor> &descale_k
+);
+
 #define CHECK_DEVICE(x) TORCH_CHECK(x.is_cuda(), #x " must be on CUDA")
 #define CHECK_SHAPE(x, ...) TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
@@ -184,7 +200,9 @@ fwd_kvcache_mla(
     const at::Tensor &tile_scheduler_metadata,   // num_sm_parts x TileSchedulerMetaDataSize
     const at::Tensor &num_splits,                // batch_size + 1
     const bool &is_fp8,
-    const std::optional<at::Tensor> &indices     // None, or batch_size x seqlen_q x topk
+    const std::optional<at::Tensor> &indices,    // None, or batch_size x seqlen_q x topk
+    const std::optional<at::Tensor> &descale_q,  // None or batch_size, for dense fp8
+    const std::optional<at::Tensor> &descale_k   // None or batch_size, for dense fp8
 ) {
     // cast value here
     const int head_size_v_int = static_cast<int>(head_size_v);
@@ -348,7 +366,19 @@ fwd_kvcache_mla(
             }
         } else {
             if (is_fp8) {
-                TORCH_CHECK(false, "Dense FP8 MLA is not supported on SM90");
+                // Check if this is dense fp8 (q and k are both fp8, requires descale)
+                bool is_dense_fp8 = (q_dtype == torch::kFloat8_e4m3fn || q_dtype == torch::kFloat8_e5m2) && descale_q.has_value() && descale_k.has_value();
+                if (is_dense_fp8) {
+                    // Use dense fp8 implementation with descale parameters
+                    return fwd_kvcache_mla_fp8(
+                        q, kcache, head_size_v_int, seqlens_k, block_table,
+                        softmax_scale_float, is_causal,
+                        tile_scheduler_metadata, num_splits,
+                        descale_q, descale_k
+                    );
+                } else {
+                    TORCH_CHECK(false, "Dense FP8 MLA requires fp8 dtype for q and k_cache, and descale_q and descale_k parameters");
+                }
             } else {
                 if (q_dtype == torch::kBFloat16) {
                     sm90::run_flash_splitkv_mla_kernel<cutlass::bfloat16_t>(params, stream);

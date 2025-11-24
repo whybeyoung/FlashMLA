@@ -40,6 +40,8 @@ def flash_mla_with_kvcache(
     causal: bool = False,
     is_fp8_kvcache: bool = False,
     indices: Optional[torch.Tensor] = None,
+    descale_q: Optional[torch.Tensor] = None,
+    descale_k: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Arguments:
@@ -54,6 +56,8 @@ def flash_mla_with_kvcache(
         causal: bool. Whether to apply causal attention mask.
         is_fp8_kvcache: bool. Whether the k_cache and v_cache are in fp8 format. For the format of FP8 KV cache, please refer to README.md
         indices: (batch_size, seq_len_q, topk), torch.int32. If not None, sparse attention will be enabled, and only tokens in the `indices` array will be attended to. Invalid indices should be set to -1 or numbers >= total_seq_len_kv. For details about how to set up `indices`, please refer to README.md.
+        descale_q: Optional[torch.Tensor], (batch_size). Per-batch scale factors for dequantizing fp8 query tensor. Required when q is fp8 format.
+        descale_k: Optional[torch.Tensor], (batch_size). Per-batch scale factors for dequantizing fp8 key cache. Required when k_cache is fp8 format and using dense fp8 MLA.
 
     Returns:
         out: (batch_size, seq_len_q, num_heads_q, head_dim_v).
@@ -63,19 +67,41 @@ def flash_mla_with_kvcache(
         softmax_scale = q.shape[-1] ** (-0.5)
     if indices is not None:
         assert causal == False, "causal must be `false` if sparse attention is enabled."
-    out, softmax_lse = flash_mla_cuda.fwd_kvcache_mla(
-        q,
-        k_cache,
-        head_dim_v,
-        cache_seqlens,
-        block_table,
-        softmax_scale,
-        causal,
-        tile_scheduler_metadata,
-        num_splits,
-        is_fp8_kvcache,
-        indices
-    )
+    
+    # Check if this is dense fp8 (q and k are both fp8, requires descale)
+    is_dense_fp8 = (q.dtype == torch.float8_e4m3fn or q.dtype == torch.float8_e5m2) and is_fp8_kvcache and indices is None and descale_q is not None and descale_k is not None
+    if is_dense_fp8:
+        # Use dense fp8 implementation with descale parameters
+        out, softmax_lse = flash_mla_cuda.fwd_kvcache_mla_fp8(
+            q,
+            k_cache,
+            head_dim_v,
+            cache_seqlens,
+            block_table,
+            softmax_scale,
+            causal,
+            tile_scheduler_metadata,
+            num_splits,
+            descale_q,
+            descale_k,
+        )
+    else:
+        # Use sparse fp8 or regular implementation
+        out, softmax_lse = flash_mla_cuda.fwd_kvcache_mla(
+            q,
+            k_cache,
+            head_dim_v,
+            cache_seqlens,
+            block_table,
+            softmax_scale,
+            causal,
+            tile_scheduler_metadata,
+            num_splits,
+            is_fp8_kvcache,
+            indices,
+            descale_q,
+            descale_k
+        )
     return out, softmax_lse
 
 

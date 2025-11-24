@@ -73,6 +73,9 @@ ext_modules.append(
             "csrc/sm100/prefill/dense/fmha_cutlass_fwd_sm100.cu",
             "csrc/sm100/prefill/dense/fmha_cutlass_bwd_sm100.cu",
             "csrc/sm100/prefill/sparse/fwd.cu",
+            "csrc/extension/sm90/dense_fp8/dense_fp8_python_api.cpp",
+            "csrc/extension/sm90/dense_fp8/flash_fwd_mla_fp8_sm90.cu",
+            "csrc/extension/sm90/dense_fp8/flash_fwd_mla_metadata.cu",
         ],
         extra_compile_args={
             "cxx": cxx_args + get_features_args(),
