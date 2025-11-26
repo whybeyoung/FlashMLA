@@ -188,21 +188,22 @@ get_mla_decoding_metadata(
     return {tile_scheduler_metadata, num_splits};
 }
 
-std::vector<at::Tensor>
-fwd_kvcache_mla(
-    at::Tensor &q,                               // batch_size x seqlen_q x num_heads x head_size
-    const at::Tensor &kcache,                    // num_blocks x page_block_size x num_heads_k x head_size (when is_fp8 is False) or num_blocks x num_heads_k x (page_block_size*656) (when is_fp8 is True)
+// Internal implementation with all parameters
+static std::vector<at::Tensor>
+fwd_kvcache_mla_impl(
+    at::Tensor &q,
+    const at::Tensor &kcache,
     const int64_t head_size_v,
-    const at::Tensor &seqlens_k,                 // batch_size
-    const at::Tensor &block_table,               // batch_size x max_num_blocks_per_seq
+    const at::Tensor &seqlens_k,
+    const at::Tensor &block_table,
     const double softmax_scale,
     bool is_causal,
-    const at::Tensor &tile_scheduler_metadata,   // num_sm_parts x TileSchedulerMetaDataSize
-    const at::Tensor &num_splits,                // batch_size + 1
+    const at::Tensor &tile_scheduler_metadata,
+    const at::Tensor &num_splits,
     const bool &is_fp8,
-    const std::optional<at::Tensor> &indices,    // None, or batch_size x seqlen_q x topk
-    const std::optional<at::Tensor> &descale_q,  // None or batch_size, for dense fp8
-    const std::optional<at::Tensor> &descale_k   // None or batch_size, for dense fp8
+    const std::optional<at::Tensor> &indices,
+    const std::optional<at::Tensor> &descale_q,
+    const std::optional<at::Tensor> &descale_k
 ) {
     // cast value here
     const int head_size_v_int = static_cast<int>(head_size_v);
@@ -502,4 +503,50 @@ std::vector<at::Tensor> sparse_prefill_fwd(
     }
 
     return {out, max_logits, lse};
+}
+
+// Public API: 11 parameters version (for backward compatibility with sgl-kernel)
+std::vector<at::Tensor>
+fwd_kvcache_mla(
+    at::Tensor &q,
+    const at::Tensor &kcache,
+    const int64_t head_size_v,
+    const at::Tensor &seqlens_k,
+    const at::Tensor &block_table,
+    const double softmax_scale,
+    bool is_causal,
+    const at::Tensor &tile_scheduler_metadata,
+    const at::Tensor &num_splits,
+    const bool &is_fp8,
+    const std::optional<at::Tensor> &indices
+) {
+    return fwd_kvcache_mla_impl(
+        q, kcache, head_size_v, seqlens_k, block_table,
+        softmax_scale, is_causal, tile_scheduler_metadata, num_splits,
+        is_fp8, indices, std::nullopt, std::nullopt
+    );
+}
+
+// Public API: 13 parameters version (with descale_q and descale_k)
+std::vector<at::Tensor>
+fwd_kvcache_mla(
+    at::Tensor &q,
+    const at::Tensor &kcache,
+    const int64_t head_size_v,
+    const at::Tensor &seqlens_k,
+    const at::Tensor &block_table,
+    const double softmax_scale,
+    bool is_causal,
+    const at::Tensor &tile_scheduler_metadata,
+    const at::Tensor &num_splits,
+    const bool &is_fp8,
+    const std::optional<at::Tensor> &indices,
+    const std::optional<at::Tensor> &descale_q,
+    const std::optional<at::Tensor> &descale_k
+) {
+    return fwd_kvcache_mla_impl(
+        q, kcache, head_size_v, seqlens_k, block_table,
+        softmax_scale, is_causal, tile_scheduler_metadata, num_splits,
+        is_fp8, indices, descale_q, descale_k
+    );
 }
